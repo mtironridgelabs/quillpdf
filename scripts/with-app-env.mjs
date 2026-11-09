@@ -20,9 +20,9 @@
  * `process.env`, which is why the merge has to happen before Vite starts.
  */
 import { spawn } from "node:child_process";
-import { readFileSync, realpathSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import { constants as osConstants } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const APP_ENV_REL_PATH = ".grok/app-env.json";
@@ -87,6 +87,61 @@ export function projectRoot() {
   return dirname(dirname(fileURLToPath(import.meta.url)));
 }
 
+/** npm package names we are willing to treat as a local CLI (`vite`, not `../x`). */
+const BARE_PACKAGE_NAME = /^[a-zA-Z0-9._-]+$/;
+
+/**
+ * JS entry of a bare package CLI installed under `root/node_modules`, if any.
+ *
+ * `spawn("vite")` looks the name up on PATH. On Windows the npm shim is
+ * `node_modules/.bin/vite.cmd`, and CreateProcess does not apply PATHEXT, so
+ * the spawn fails with ENOENT before Vite starts. That is the v0.1.0 Windows
+ * release failure (`spawn vite ENOENT`, exit 127) inside `beforeBuildCommand`.
+ * The Unix shim executes this same JS file. Return it so the caller can run
+ * `node <script>` with an absolute Node path and never touch PATH or a shell.
+ */
+export function localPackageBin(root, command) {
+  if (typeof command !== "string" || !BARE_PACKAGE_NAME.test(command)) return null;
+  const packageDir = join(root, "node_modules", command);
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
+  } catch {
+    return null;
+  }
+  const bin = manifest?.bin;
+  let relativeBin = null;
+  if (typeof bin === "string") relativeBin = bin;
+  else if (bin && typeof bin === "object" && typeof bin[command] === "string") {
+    relativeBin = bin[command];
+  }
+  if (typeof relativeBin !== "string" || relativeBin.length === 0 || isAbsolute(relativeBin)) {
+    return null;
+  }
+  const script = join(packageDir, relativeBin);
+  const fromPackage = relative(packageDir, script);
+  if (fromPackage.startsWith("..") || isAbsolute(fromPackage)) return null;
+  // Only JS entries. A native or shell bin must stay a PATH lookup; running
+  // it with Node would change what that command does. Vite's bin is JS.
+  if (!/\.(?:[cm]?js)$/i.test(script)) return null;
+  try {
+    if (!statSync(script).isFile()) return null;
+  } catch {
+    return null;
+  }
+  return script;
+}
+
+/**
+ * `spawn` file and args for `command`. Local Node CLIs run as
+ * `process.execPath <package bin> ...args`; everything else is unchanged.
+ */
+export function commandInvocation(root, command, args) {
+  const script = localPackageBin(root, command);
+  if (!script) return { command, args };
+  return { command: process.execPath, args: [script, ...args] };
+}
+
 /**
  * Whether `moduleUrl` is the script node was asked to run.
  *
@@ -111,7 +166,8 @@ function main(argv) {
     process.exit(2);
   }
   const env = mergeAppEnv(readAppEnv(projectRoot()), process.env);
-  const child = spawn(command, args, { stdio: "inherit", env });
+  const invocation = commandInvocation(projectRoot(), command, args);
+  const child = spawn(invocation.command, invocation.args, { stdio: "inherit", env });
   // The dev server is long-running and is stopped by signalling this wrapper.
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     process.on(signal, () => child.kill(signal));

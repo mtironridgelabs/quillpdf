@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
 import {
   APP_ENV_REL_PATH,
+  commandInvocation,
+  localPackageBin,
   mergeAppEnv,
   parseAppEnv,
   projectRoot,
@@ -126,3 +128,91 @@ test("the CLI still runs when invoked through a symlinked path", async () => {
   ]);
   assert.equal(stdout, "false");
 });
+
+function installFakeBin(root, command, relativeBin, body = "") {
+  const packageDir = join(root, "node_modules", command);
+  mkdirSync(join(packageDir, "bin"), { recursive: true });
+  writeFileSync(
+    join(packageDir, "package.json"),
+    JSON.stringify({ bin: { [command]: relativeBin } }),
+  );
+  const script = join(packageDir, relativeBin);
+  mkdirSync(join(script, ".."), { recursive: true });
+  writeFileSync(script, body);
+  return script;
+}
+
+test("a local package bin is run with node instead of a bare command", () => {
+  // Windows release v0.1.0 died on `spawn vite ENOENT`: the npm shim is
+  // vite.cmd, and spawn does not resolve PATHEXT. The invocation must be
+  // this Node plus the package's JS entry, which is what the Unix shim runs.
+  const root = mkdtempSync(join(tmpdir(), "app-env-bin-"));
+  const script = installFakeBin(root, "vite", "bin/vite.js");
+  assert.equal(localPackageBin(root, "vite"), script);
+  assert.deepEqual(commandInvocation(root, "vite", ["build"]), {
+    command: process.execPath,
+    args: [script, "build"],
+  });
+});
+
+test("a string bin field is accepted", () => {
+  const root = mkdtempSync(join(tmpdir(), "app-env-bin-"));
+  const packageDir = join(root, "node_modules", "vite");
+  mkdirSync(join(packageDir, "bin"), { recursive: true });
+  writeFileSync(join(packageDir, "package.json"), JSON.stringify({ bin: "bin/vite.js" }));
+  writeFileSync(join(packageDir, "bin", "vite.js"), "");
+  assert.equal(localPackageBin(root, "vite"), join(packageDir, "bin", "vite.js"));
+});
+
+test("a bin path that escapes the package is ignored", () => {
+  const root = mkdtempSync(join(tmpdir(), "app-env-bin-"));
+  const packageDir = join(root, "node_modules", "vite");
+  mkdirSync(packageDir, { recursive: true });
+  writeFileSync(
+    join(packageDir, "package.json"),
+    JSON.stringify({ bin: { vite: "../../evil.js" } }),
+  );
+  writeFileSync(join(root, "evil.js"), "");
+  assert.equal(localPackageBin(root, "vite"), null);
+  assert.deepEqual(commandInvocation(root, "vite", ["build"]), {
+    command: "vite",
+    args: ["build"],
+  });
+});
+
+test("absolute commands, missing packages, and non-JS bins are not rewritten", () => {
+  const root = mkdtempSync(join(tmpdir(), "app-env-bin-"));
+  assert.deepEqual(commandInvocation(root, process.execPath, ["-e", "1"]), {
+    command: process.execPath,
+    args: ["-e", "1"],
+  });
+  assert.equal(localPackageBin(root, "vite"), null);
+  assert.equal(localPackageBin(root, "../vite"), null);
+  assert.equal(localPackageBin(root, "vite.cmd"), null);
+  installFakeBin(root, "tool", "bin/tool");
+  assert.equal(localPackageBin(root, "tool"), null);
+});
+
+test(
+  "the wrapper runs the local vite CLI when the .bin shim is not on PATH",
+  { skip: !existsSync(join(projectRoot(), "node_modules", "vite", "package.json")) },
+  async () => {
+    const script = localPackageBin(projectRoot(), "vite");
+    assert.ok(script, "installed vite must resolve to its JS entry, not the .bin shim");
+    assert.match(script, /vite[/\\]bin[/\\]vite\.js$/);
+    // Drop node_modules/.bin so a bare `spawn("vite")` cannot succeed. This is
+    // the Windows failure mode (shim not executable as the name `vite`).
+    const env = { ...process.env };
+    for (const key of ["PATH", "Path"]) {
+      if (typeof env[key] !== "string") continue;
+      env[key] = env[key]
+        .split(delimiter)
+        .filter((entry) => !entry.includes("node_modules"))
+        .join(delimiter);
+    }
+    const { stdout } = await execFileAsync(process.execPath, [WRAPPER, "vite", "--version"], {
+      env,
+    });
+    assert.match(stdout, /\d+\.\d+\.\d+/);
+  },
+);
