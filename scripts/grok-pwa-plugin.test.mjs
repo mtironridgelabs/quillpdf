@@ -21,6 +21,10 @@ import { renderInstallPage } from "./grok-pwa-plugin.mjs";
 
 const TEMPLATE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
+// Head tests that omit `cwd` read process.cwd(). The product has site.json and
+// public/og.jpg, which would leak into those fixtures. Isolate this file.
+process.chdir(mkdtempSync(join(tmpdir(), "quill-pwa-tests-")));
+
 test("injects before </head>", () => {
   const out = injectGrokPwaHead("<html><head><title>x</title></head><body></body></html>");
   assert.match(out, /rel="manifest"/);

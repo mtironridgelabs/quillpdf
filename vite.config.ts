@@ -1,5 +1,6 @@
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";
 import { defineConfig } from "vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
@@ -145,10 +146,28 @@ function authPopupPlugin(): Plugin {
 // `0.0.0.0:8080` is the live-preview contract — don't change host/port.
 // The dev server starts once `src/router.tsx` and `src/routes/` exist — see
 // AGENTS.md § "First scaffold".
+//
+// QUILL_DESKTOP=1 is the Windows shell only (`npm run build:desktop`). It emits
+// a static SPA under dist/desktop and does not change the Vercel build.
+const desktopBuild = process.env.QUILL_DESKTOP === "1";
+const desktopTauriStub = fileURLToPath(new URL("./src/lib/desktop-tauri-stub.ts", import.meta.url));
+
 export default defineConfig(({ command, isPreview }) => ({
+  // Relative URLs so embedded assets resolve on https://tauri.localhost.
+  // The web build keeps the default absolute base.
+  ...(desktopBuild ? { base: "./" } : {}),
+  ...(desktopBuild
+    ? {
+        environments: {
+          client: {
+            build: { outDir: "dist/desktop" },
+          },
+        },
+      }
+    : {}),
   server: {
-    host: "0.0.0.0",
-    port: 8080,
+    host: desktopBuild ? "127.0.0.1" : "0.0.0.0",
+    port: desktopBuild ? 1420 : 8080,
     strictPort: true,
   },
   preview: {
@@ -156,7 +175,22 @@ export default defineConfig(({ command, isPreview }) => ({
     port: 8081,
     strictPort: true,
   },
-  resolve: { tsconfigPaths: true },
+  resolve: {
+    tsconfigPaths: true,
+    // The Vercel install omits devDependencies, so the web build must not
+    // resolve @tauri-apps. Desktop builds (QUILL_DESKTOP=1) use the real packages.
+    ...(desktopBuild
+      ? {}
+      : {
+          alias: [
+            { find: "@tauri-apps/plugin-dialog", replacement: desktopTauriStub },
+            { find: "@tauri-apps/plugin-updater", replacement: desktopTauriStub },
+            { find: "@tauri-apps/plugin-process", replacement: desktopTauriStub },
+            { find: "@tauri-apps/api/core", replacement: desktopTauriStub },
+            { find: "@tauri-apps/api/event", replacement: desktopTauriStub },
+          ],
+        }),
+  },
   plugins: [
     pgliteBootstrapPlugin(),
     // Before tanstackStart so /auth/popup never falls through to the SPA.
@@ -166,8 +200,20 @@ export default defineConfig(({ command, isPreview }) => ({
     // PWA head + ?install=1 tutorial page; runs before Start/Nitro.
     grokPwaPlugin(),
     tailwindcss(),
-    tanstackStart(),
-    ...(command === "build" || isPreview
+    desktopBuild
+      ? tanstackStart({
+          spa: {
+            enabled: true,
+            prerender: {
+              outputPath: "/index.html",
+              crawlLinks: false,
+            },
+          },
+        })
+      : tanstackStart(),
+    // Nitro stays on the web build and preview only. The desktop shell embeds
+    // the static client output and has no server.
+    ...(!desktopBuild && (command === "build" || isPreview)
       ? [
           nitro({
             preset: "vercel",

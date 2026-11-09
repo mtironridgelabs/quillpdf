@@ -64,7 +64,7 @@ export function wrapNote(text: string, maxWidth: number, widthOf: (line: string)
 const ink = rgb(27 / 255, 35 / 255, 48 / 255);
 
 function latin(text: string) {
-  return text.normalize("NFKD").replace(/[^\u0000-\u00ff]/g, "");
+  return [...text.normalize("NFKD")].filter((char) => char.charCodeAt(0) <= 0xff).join("");
 }
 
 /** Write answers into a form pdf-lib can open, then bake them. Throws if the file cannot be rewritten. */
