@@ -35,6 +35,15 @@ import {
 import { applyFill, NOTE_HEIGHT, NOTE_SIZE, NOTE_WIDTH, type StampNote } from "@/lib/pdf-fill";
 import { fieldsFromValues, rasterStamp } from "@/lib/raster-fill";
 import { openPdfDocument } from "@/lib/pdfjs-client";
+import {
+  checkAndInstallUpdate,
+  desktopShell,
+  dismissDefaultAppsPrompt,
+  listenForOpenedPdfs,
+  openDefaultApps,
+  savePdfWithDialog,
+  shouldPromptForDefaultApps,
+} from "@/lib/desktop";
 
 type Doc = { name: string; pdf: PDFDocumentProxy };
 type Pending = { name: string; bytes: Uint8Array };
@@ -85,6 +94,8 @@ export function Reader() {
   const [pending, setPending] = useState<Pending | null>(null);
   const [leaving, setLeaving] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const [askDefaultApps, setAskDefaultApps] = useState(false);
   const [fillable, setFillable] = useState(false);
   const [filling, setFilling] = useState(false);
   const [placing, setPlacing] = useState(false);
@@ -250,10 +261,11 @@ export function Reader() {
       } else {
         next = await flattenDocument(bytes);
       }
+      const saved = await deliverBytes(next, nameRef.current);
+      if (!saved) return false;
       past.current = [];
       setCanUndo(false);
       if (next !== bytes) await show(nameRef.current, next, pageRef.current);
-      downloadBytes(bytesRef.current ?? next, nameRef.current);
       setDirty(false);
       toast.success("Saved a copy.");
       return true;
@@ -281,8 +293,13 @@ export function Reader() {
     try {
       const out = await extractPages(bytes, indices);
       const label = pageListLabel(indices.map((index) => index + 1));
-      downloadBytes(out, `${nameRef.current.replace(/\.pdf$/i, "")} (pages ${label}).pdf`);
-      toast.success("Extracted pages downloaded. This document was not changed.");
+      const saved = await deliverBytes(out, `${nameRef.current.replace(/\.pdf$/i, "")} (pages ${label}).pdf`);
+      if (!saved) return;
+      toast.success(
+        desktopShell
+          ? "Extracted pages saved. This document was not changed."
+          : "Extracted pages downloaded. This document was not changed.",
+      );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn't extract those pages.");
     } finally {
@@ -388,6 +405,55 @@ export function Reader() {
   useEffect(() => {
     document.title = doc ? `${dirty ? "• " : ""}${doc.name} — Quill` : "Quill";
   }, [doc, dirty]);
+
+  const requestOpenRef = useRef(requestOpen);
+  requestOpenRef.current = requestOpen;
+
+  useEffect(() => {
+    if (!desktopShell) return;
+    let stop = () => {};
+    let cancelled = false;
+    void listenForOpenedPdfs((name, bytes) => {
+      requestOpenRef.current(name, bytes);
+    })
+      .then((unlisten) => {
+        if (cancelled) unlisten();
+        else stop = unlisten;
+      })
+      .catch((error) => {
+        toast.error(error instanceof Error ? error.message : "Couldn't open that PDF.");
+      });
+    return () => {
+      cancelled = true;
+      stop();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (shouldPromptForDefaultApps()) setAskDefaultApps(true);
+  }, []);
+
+  const onUpdate = useCallback(async () => {
+    if (!desktopShell || updating) return;
+    setUpdating(true);
+    try {
+      const result = await checkAndInstallUpdate();
+      if (result === "none") toast.success("Quill is up to date.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Couldn't check for an update.");
+    } finally {
+      setUpdating(false);
+    }
+  }, [updating]);
+
+  const finishDefaultApps = useCallback((openSettings: boolean) => {
+    dismissDefaultAppsPrompt();
+    setAskDefaultApps(false);
+    if (!openSettings) return;
+    void openDefaultApps().catch((error) => {
+      toast.error(error instanceof Error ? error.message : "Couldn't open Windows default app settings.");
+    });
+  }, []);
 
   useEffect(() => {
     const onBefore = (event: BeforeUnloadEvent) => {
@@ -566,6 +632,11 @@ export function Reader() {
               <FolderOpen {...icon} />
               Open
             </button>
+            {desktopShell && !doc ? (
+              <button type="button" className="q-btn" disabled={updating} onClick={() => void onUpdate()}>
+                {updating ? "Checking…" : "Update"}
+              </button>
+            ) : null}
             {doc ? (
               <>
                 <span className="q-group">
@@ -897,6 +968,28 @@ export function Reader() {
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
+      <Dialog.Root open={askDefaultApps} onOpenChange={(next) => !next && finishDefaultApps(false)}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="q-overlay" />
+          <Dialog.Content className="q-dialog">
+            <Dialog.Title asChild>
+              <h2>Choose how PDFs open</h2>
+            </Dialog.Title>
+            <Dialog.Description>
+              Quill is in the Open with list. It does not change your default PDF app. If you want PDFs to
+              open in Quill, choose it in Windows default apps.
+            </Dialog.Description>
+            <div className="q-dialog-actions">
+              <button type="button" className="q-btn" onClick={() => finishDefaultApps(false)}>
+                Not now
+              </button>
+              <button type="button" className="q-btn primary" onClick={() => finishDefaultApps(true)}>
+                Open default app settings
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
       <Toaster position="bottom-center" toastOptions={{ className: "q-toast" }} />
     </div>
   );
@@ -940,6 +1033,14 @@ function pdfBlob(bytes: Uint8Array) {
   const copy = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(copy).set(bytes);
   return new Blob([copy], { type: "application/pdf" });
+}
+
+async function deliverBytes(bytes: Uint8Array, filename: string): Promise<boolean> {
+  if (!desktopShell) {
+    downloadBytes(bytes, filename);
+    return true;
+  }
+  return savePdfWithDialog(bytes, filename);
 }
 
 function downloadBytes(bytes: Uint8Array, filename: string) {
