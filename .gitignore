@@ -1,0 +1,12 @@
+node_modules
+.vercel
+.tanstack
+dist
+.output
+src-tauri/target
+*.key
+.env
+.env.*
+screenshots
+artifacts
+attachments
