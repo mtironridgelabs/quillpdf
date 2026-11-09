@@ -48,8 +48,12 @@ describe("desktop shell contract", () => {
     assert.equal(hooks.includes('Software\\Classes\\.pdf" ""'), false);
   });
 
-  it("points the updater at the GitHub latest.json endpoint and a pubkey placeholder", () => {
-    assert.equal(conf.plugins.updater.pubkey, UPDATER_PUBKEY_PLACEHOLDER);
+  it("points the updater at the GitHub latest.json endpoint and the minisign public key", () => {
+    assert.equal(
+      conf.plugins.updater.pubkey,
+      "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQwNzcwMEY1RDM2RDUwQUYKUldTdlVHM1Q5UUIzUUpFSUo1OENILzVXVVpOMWEyU3hLN2ZUM1NWdGxpdDdVVkcwRjhGM25xQ3YK",
+    );
+    assert.equal(conf.plugins.updater.pubkey.includes(UPDATER_PUBKEY_PLACEHOLDER), false);
     assert.deepEqual(conf.plugins.updater.endpoints, [
       "https://github.com/mtironridgelabs/quillpdf/releases/latest/download/latest.json",
     ]);
