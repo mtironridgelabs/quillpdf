@@ -73,7 +73,7 @@ describe("pdf page desk", () => {
     assert.equal(untouched, plain);
   });
 
-  it("writes a text box onto a page and bakes a field", async () => {
+  it("keeps a filled field editable and turns a text box into a field", async () => {
     const formDoc = await PDFDocument.create();
     const page = formDoc.addPage([612, 792]);
     const form = formDoc.getForm();
@@ -86,8 +86,20 @@ describe("pdf page desk", () => {
       [{ page: 1, x: 72, y: 640, text: "Bank note", size: 11 }],
     );
     const doc = await PDFDocument.load(filled);
-    assert.equal(doc.getPageCount(), 1);
-    assert.equal(doc.getForm().getFields().length, 0);
+    const saved = doc.getForm();
+    assert.equal(saved.getTextField("Client.Name").getText(), "Ada");
+    const note = saved.getFields().find((field) => field.getName().startsWith("Quill.Note."));
+    assert.ok(note);
+    assert.equal(saved.getTextField(note.getName()).getText(), "Bank note");
+
+    const again = await applyFill(
+      filled,
+      [{ name: "Client.Name", kind: "text", value: "Bea", page: 1, rect: [72, 700, 232, 724] }],
+      [],
+    );
+    const next = await PDFDocument.load(again);
+    assert.equal(next.getForm().getTextField("Client.Name").getText(), "Bea");
+    assert.equal(next.getForm().getFields().length, 2);
   });
 
   it("refuses to remove every page and moves one page without losing its turn", async () => {

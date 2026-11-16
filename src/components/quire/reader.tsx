@@ -25,7 +25,6 @@ import { Stage, type InkStroke, type ViewMode } from "@/components/quire/stage";
 import { appUrl } from "@/lib/app-url";
 import {
   extractPages,
-  flattenDocument,
   insertPages,
   movePage,
   pageListLabel,
@@ -250,6 +249,7 @@ export function Reader() {
       const answers = await fieldsFromValues(pdfRef.current!, fieldValuesRef.current);
       const written = notesRef.current.filter((note) => note.text);
       let next = bytes;
+      let keptFields = true;
       if (answers.length > 0 || written.length > 0) {
         try {
           next = await applyFill(bytes, answers, written);
@@ -257,9 +257,8 @@ export function Reader() {
           const pdf = pdfRef.current;
           if (!pdf) throw new Error("Quill couldn't write this PDF directly.");
           next = await rasterStamp(pdf, answers, written);
+          keptFields = false;
         }
-      } else {
-        next = await flattenDocument(bytes);
       }
       const saved = await deliverBytes(next, nameRef.current);
       if (!saved) return false;
@@ -267,7 +266,9 @@ export function Reader() {
       setCanUndo(false);
       if (next !== bytes) await show(nameRef.current, next, pageRef.current);
       setDirty(false);
-      toast.success("Saved a copy.");
+      toast.success(
+        keptFields ? "Saved a copy." : "Saved a copy. This PDF was locked, so the fields could not be kept.",
+      );
       return true;
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn't save a copy.");
@@ -793,7 +794,7 @@ export function Reader() {
           </div>
           {fillable ? (
             <p className="q-form-note">
-              This PDF has fillable fields. Use Forms to type on the page. Save a copy to keep it.
+              This PDF has fillable fields. Use Forms to type on the page. Save a copy keeps the fields editable.
             </p>
           ) : null}
         </header>
