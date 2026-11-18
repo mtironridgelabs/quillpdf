@@ -9,8 +9,6 @@ use std::sync::Mutex;
 
 use pdfium_render::prelude::*;
 
-const FPDF_ERR_SUCCESS: u64 = 0;
-const FPDF_ERR_PASSWORD: u64 = 4;
 const FORMFIELD_TEXT: c_int = 6;
 const FORMFIELD_CHECKBOX: c_int = 2;
 const ANNOT_WIDGET: i32 = 20;
@@ -56,8 +54,8 @@ unsafe fn fill_with(
 ) -> Result<Vec<u8>, String> {
     let document = bindings.FPDF_LoadMemDocument64(bytes, Some(""));
     if document.is_null() {
-        let code = bindings.FPDF_GetLastError();
-        if code == FPDF_ERR_PASSWORD {
+        let code = bindings.FPDF_GetLastError() as u64;
+        if code == 4 {
             return Err("This PDF needs a password to open. Quill doesn't open those files.".into());
         }
         return Err(format!("Quill couldn't open this locked PDF (PDFium {code})."));
@@ -317,8 +315,8 @@ unsafe fn save_copy(bindings: &dyn PdfiumLibraryBindings, document: FPDF_DOCUMEN
     };
     let ok = bindings.FPDF_SaveAsCopy(document, writer.as_file_write(), 0);
     if !bindings.is_true(ok) {
-        let code = bindings.FPDF_GetLastError();
-        let detail = if code == FPDF_ERR_SUCCESS { String::new() } else { format!(" ({code})") };
+        let code = bindings.FPDF_GetLastError() as u64;
+        let detail = if code == 0 { String::new() } else { format!(" ({code})") };
         return Err(format!("Quill couldn't save this locked PDF{detail}."));
     }
     cursor.flush().map_err(|err| format!("Quill couldn't save this locked PDF ({err})."))?;
