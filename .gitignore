@@ -5,6 +5,9 @@ dist
 .output
 src-tauri/target
 src-tauri/gen
+src-tauri/resources/*.dll
+src-tauri/resources/*.so
+src-tauri/resources/*.dylib
 *.key
 .env
 .env.*

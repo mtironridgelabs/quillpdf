@@ -1,4 +1,5 @@
 import { PDFDocument, degrees } from "pdf-lib";
+import { LOCKED_PAGES } from "./save-plan.ts";
 
 export type QuarterTurn = 90 | -90 | 180;
 
@@ -8,7 +9,7 @@ async function load(bytes: Uint8Array) {
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     if (/encrypt|password/i.test(message)) {
-      throw new Error("This PDF is locked. Quill doesn't open password-protected files.");
+      throw new Error(LOCKED_PAGES);
     }
     throw new Error("Quill couldn't read that PDF.");
   }
