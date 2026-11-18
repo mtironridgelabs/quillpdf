@@ -63,6 +63,20 @@ export async function listenForOpenedPdfs(
   });
 }
 
+/** Keep the fields on an owner-locked PDF. The Windows app does this. The browser cannot. */
+export async function fillLockedForm(
+  bytes: Uint8Array,
+  fields: Array<{ name: string; kind: string; value: string }>,
+): Promise<Uint8Array> {
+  if (!desktopShell) throw new Error("Keeping a locked form editable is only available in the Windows app.");
+  const { invoke } = await import("@tauri-apps/api/core");
+  const base64 = await invoke<string>("fill_locked_form", {
+    base64: bytesToBase64(bytes),
+    fields: fields.map((field) => ({ name: field.name, kind: field.kind, value: field.value })),
+  });
+  return base64ToBytes(base64);
+}
+
 /** Native save dialog. Returns false when the user cancels. */
 export async function savePdfWithDialog(bytes: Uint8Array, filename: string): Promise<boolean> {
   if (!desktopShell) return false;

@@ -23,10 +23,10 @@ describe("desktop shell contract", () => {
   const hooks = read("src-tauri/windows/hooks.nsh");
   const release = read(".github/workflows/release.yml");
 
-  it("keeps version 0.1.1 on the app, the shell, and the npm package", () => {
-    assert.equal(conf.version, "0.1.1");
-    assert.equal(pkg.version, "0.1.1");
-    assert.match(cargo, /^version = "0\.1\.1"$/m);
+  it("keeps version 0.1.2 on the app, the shell, and the npm package", () => {
+    assert.equal(conf.version, "0.1.2");
+    assert.equal(pkg.version, "0.1.2");
+    assert.match(cargo, /^version = "0\.1\.2"$/m);
   });
 
   it("names the per-user NSIS app Quill", () => {
@@ -70,9 +70,21 @@ describe("desktop shell contract", () => {
     assert.match(release, /TAURI_SIGNING_PRIVATE_KEY/);
     assert.match(release, /TAURI_SIGNING_PRIVATE_KEY_PASSWORD/);
     assert.match(release, /check-updater-release\.mjs/);
+    assert.match(release, /fetch-pdfium\.mjs/);
     assert.equal(release.includes("contents: write"), true);
     const jobBlock = release.slice(release.indexOf("jobs:"));
     assert.equal(jobBlock.includes("contents: read"), false);
+  });
+
+  it("ships PDFium 8125 beside the app so a locked form can be saved", () => {
+    assert.equal(conf.bundle.resources["resources/pdfium.dll"], "pdfium.dll");
+    assert.match(cargo, /pdfium-render/);
+    assert.match(cargo, /pdfium_8125/);
+    assert.match(cargo, /thread_safe/);
+    assert.match(read("scripts/fetch-pdfium.mjs"), /const version = "8125"/);
+    assert.match(read("scripts/fetch-pdfium.mjs"), /chromium%2F\$\{version\}/);
+    assert.match(read("scripts/fetch-pdfium.mjs"), /pdfium-win-x64\.tgz/);
+    assert.equal(read("src-tauri/src/lib.rs").includes("fill_locked_form"), true);
   });
 
   it("rejects a placeholder pubkey and a missing signing secret", () => {

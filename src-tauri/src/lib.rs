@@ -1,3 +1,5 @@
+mod pdfium_fill;
+
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -105,6 +107,55 @@ fn write_pdf_file(path: String, base64: String) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(serde::Deserialize)]
+struct LockedField {
+    name: String,
+    kind: String,
+    value: String,
+}
+
+#[tauri::command]
+fn fill_locked_form(app: AppHandle, base64: String, fields: Vec<LockedField>) -> Result<String, String> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(base64.trim())
+        .map_err(|_| "Couldn't read the PDF bytes.".to_string())?;
+    let library = pdfium_library(&app)?;
+    let writes: Vec<pdfium_fill::FieldWrite> = fields
+        .iter()
+        .map(|field| pdfium_fill::FieldWrite {
+            name: field.name.as_str(),
+            kind: field.kind.as_str(),
+            value: field.value.as_str(),
+        })
+        .collect();
+    let saved = pdfium_fill::fill_locked_form(&library, &bytes, &writes)?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(saved))
+}
+
+fn pdfium_library(app: &AppHandle) -> Result<PathBuf, String> {
+    let file_name = if cfg!(windows) {
+        "pdfium.dll"
+    } else if cfg!(target_os = "macos") {
+        "libpdfium.dylib"
+    } else {
+        "libpdfium.so"
+    };
+    let mut candidates = Vec::new();
+    if let Ok(dir) = app.path().resource_dir() {
+        candidates.push(dir.join(file_name));
+        candidates.push(dir.join("resources").join(file_name));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            candidates.push(parent.join(file_name));
+            candidates.push(parent.join("resources").join(file_name));
+        }
+    }
+    candidates.into_iter().find(|path| path.is_file()).ok_or_else(|| {
+        "Quill couldn't find its PDF library, so this locked form can't be kept editable.".to_string()
+    })
+}
+
 #[tauri::command]
 fn open_default_apps() -> Result<(), String> {
     #[cfg(target_os = "windows")]
@@ -141,6 +192,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             take_opened_pdf,
             write_pdf_file,
+            fill_locked_form,
             open_default_apps
         ])
         .run(tauri::generate_context!())

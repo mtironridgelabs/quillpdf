@@ -20,6 +20,7 @@ import {
 import { Toaster, toast } from "sonner";
 import * as Dialog from "@radix-ui/react-dialog";
 import { InsertDialog } from "@/components/quire/insert-dialog";
+import { LockedSaveDialog, type LockedChoice } from "@/components/quire/locked-save-dialog";
 import { Sidebar } from "@/components/quire/sidebar";
 import { Stage, type InkStroke, type ViewMode } from "@/components/quire/stage";
 import { appUrl } from "@/lib/app-url";
@@ -31,13 +32,16 @@ import {
   removePages,
   rotatePages,
 } from "@/lib/pdf-ops";
-import { applyFill, NOTE_HEIGHT, NOTE_SIZE, NOTE_WIDTH, type StampNote } from "@/lib/pdf-fill";
-import { fieldsFromValues, rasterStamp } from "@/lib/raster-fill";
+import { NOTE_HEIGHT, NOTE_SIZE, NOTE_WIDTH, type StampNote } from "@/lib/pdf-fill";
+import { fieldsFromValues } from "@/lib/raster-fill";
+import { buildSavedCopy } from "@/lib/save-copy";
+import { isOwnerLocked, LOCKED_FIELDS, LOCKED_FIELDS_BROWSER, LOCKED_PAGES, LOCKED_PAGES_BROWSER, savedCopyMessage, TEXT_BOX, TEXT_BOX_LOCKED } from "@/lib/save-plan";
 import { openPdfDocument } from "@/lib/pdfjs-client";
 import {
   checkAndInstallUpdate,
   desktopShell,
   dismissDefaultAppsPrompt,
+  fillLockedForm,
   listenForOpenedPdfs,
   openDefaultApps,
   savePdfWithDialog,
@@ -73,6 +77,8 @@ export function Reader() {
   const fieldValuesRef = useRef<Record<string, string>>({});
   const notesRef = useRef<Array<StampNote & { id: string }>>([]);
   const fillView = useRef<{ mode: ViewMode; zoom: number } | null>(null);
+  const lockedRef = useRef(false);
+  const lockedChoice = useRef<((choice: LockedChoice) => void) | null>(null);
 
   const [doc, setDoc] = useState<Doc | null>(null);
   const [page, setPage] = useState(1);
@@ -96,6 +102,8 @@ export function Reader() {
   const [updating, setUpdating] = useState(false);
   const [askDefaultApps, setAskDefaultApps] = useState(false);
   const [fillable, setFillable] = useState(false);
+  const [locked, setLocked] = useState(false);
+  const [lockedPrompt, setLockedPrompt] = useState(false);
   const [filling, setFilling] = useState(false);
   const [placing, setPlacing] = useState(false);
   const [focusNote, setFocusNote] = useState("");
@@ -123,11 +131,17 @@ export function Reader() {
       return;
     }
     let fields = false;
+    let ownerLocked = false;
     try {
       const objects = await pdf.getFieldObjects();
       fields = Boolean(objects && Object.keys(objects).length > 0);
     } catch {
       fields = false;
+    }
+    try {
+      ownerLocked = isOwnerLocked(await pdf.getPermissions());
+    } catch {
+      ownerLocked = false;
     }
     if (generation !== genRef.current) {
       await pdf.destroy();
@@ -138,6 +152,8 @@ export function Reader() {
     bytesRef.current = bytes;
     nameRef.current = name;
     setDoc({ name, pdf });
+    lockedRef.current = ownerLocked;
+    setLocked(ownerLocked);
     setFillable(fields);
     setFieldValues({});
     setNotes([]);
@@ -198,6 +214,10 @@ export function Reader() {
     async (run: (bytes: Uint8Array) => Promise<Uint8Array>, atPage?: number) => {
       const bytes = bytesRef.current;
       if (!bytes || busyRef.current) return false;
+      if (lockedRef.current) {
+        toast.error(desktopShell ? LOCKED_PAGES : LOCKED_PAGES_BROWSER);
+        return false;
+      }
       busyRef.current = true;
       setBusy(true);
       try {
@@ -240,35 +260,45 @@ export function Reader() {
     }
   }, [show]);
 
+  const finishLockedChoice = useCallback((choice: LockedChoice) => {
+    const resolve = lockedChoice.current;
+    if (!resolve) return;
+    lockedChoice.current = null;
+    setLockedPrompt(false);
+    resolve(choice);
+  }, []);
+
   const saveCopy = useCallback(async () => {
     const bytes = bytesRef.current;
-    if (!bytes || busyRef.current) return false;
+    const pdf = pdfRef.current;
+    if (!bytes || !pdf || busyRef.current) return false;
     busyRef.current = true;
     setBusy(true);
     try {
-      const answers = await fieldsFromValues(pdfRef.current!, fieldValuesRef.current);
+      const answers = await fieldsFromValues(pdf, fieldValuesRef.current);
       const written = notesRef.current.filter((note) => note.text);
-      let next = bytes;
-      let keptFields = true;
-      if (answers.length > 0 || written.length > 0) {
-        try {
-          next = await applyFill(bytes, answers, written);
-        } catch {
-          const pdf = pdfRef.current;
-          if (!pdf) throw new Error("Quill couldn't write this PDF directly.");
-          next = await rasterStamp(pdf, answers, written);
-          keptFields = false;
-        }
-      }
-      const saved = await deliverBytes(next, nameRef.current);
+      const saved = await buildSavedCopy({
+        bytes,
+        pdf,
+        answers,
+        notes: written,
+        locked: lockedRef.current,
+        canPdfium: desktopShell,
+        ask: () =>
+          new Promise((resolve) => {
+            lockedChoice.current = resolve;
+            setLockedPrompt(true);
+          }),
+        fillLocked: desktopShell ? fillLockedForm : undefined,
+      });
       if (!saved) return false;
+      const wrote = await deliverBytes(saved.bytes, nameRef.current);
+      if (!wrote) return false;
       past.current = [];
       setCanUndo(false);
-      if (next !== bytes) await show(nameRef.current, next, pageRef.current);
+      if (saved.bytes !== bytes) await show(nameRef.current, saved.bytes, pageRef.current);
       setDirty(false);
-      toast.success(
-        keptFields ? "Saved a copy." : "Saved a copy. This PDF was locked, so the fields could not be kept.",
-      );
+      toast.success(savedCopyMessage(saved.notice, saved.detail));
       return true;
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn't save a copy.");
@@ -288,6 +318,10 @@ export function Reader() {
   const extract = useCallback(async () => {
     const bytes = bytesRef.current;
     if (!bytes || busyRef.current) return;
+    if (lockedRef.current) {
+      toast.error(desktopShell ? LOCKED_PAGES : LOCKED_PAGES_BROWSER);
+      return;
+    }
     const indices = chosen();
     busyRef.current = true;
     setBusy(true);
@@ -363,6 +397,8 @@ export function Reader() {
     bytesRef.current = null;
     past.current = [];
     setDoc(null);
+    lockedRef.current = false;
+    setLocked(false);
     setFillable(false);
     setFilling(false);
     setPlacing(false);
@@ -558,13 +594,13 @@ export function Reader() {
               aria-label="Add a text box"
               aria-pressed={placing}
               data-on={placing || undefined}
-              title="Add a text box"
+              title={locked ? TEXT_BOX_LOCKED : TEXT_BOX}
               onClick={() => setPlacing((value) => !value)}
             >
               <Type size={22} strokeWidth={1.5} />
             </button>
           </div>
-          <button type="button" className="q-fill-save" disabled={busy} onClick={() => void saveCopy()}>
+          <button type="button" className="q-fill-save" disabled={busy} title={locked ? (desktopShell ? LOCKED_FIELDS : LOCKED_FIELDS_BROWSER) : "Save a copy. The fields stay editable."} onClick={() => void saveCopy()}>
             Save a copy
           </button>
           <button type="button" className="q-exit" aria-label="Leave forms" onClick={leaveFill}>
@@ -645,6 +681,7 @@ export function Reader() {
                     type="button"
                     className="q-btn"
                     disabled={busy}
+                    title={locked ? (desktopShell ? LOCKED_PAGES : LOCKED_PAGES_BROWSER) : "Insert pages from another PDF"}
                     onClick={() => {
                       setInsertBefore(Math.min(numPages + 1, page + 1));
                       setInsertOpen(true);
@@ -652,7 +689,7 @@ export function Reader() {
                   >
                     Insert
                   </button>
-                  <button type="button" className="q-btn" disabled={busy} onClick={() => void extract()}>
+                  <button type="button" className="q-btn" disabled={busy} title={locked ? (desktopShell ? LOCKED_PAGES : LOCKED_PAGES_BROWSER) : "Extract selected pages"} onClick={() => void extract()}>
                     <FileOutput {...icon} />
                     Extract
                   </button>
@@ -660,7 +697,7 @@ export function Reader() {
                     type="button"
                     className="q-btn icon"
                     disabled={busy || numPages < 2}
-                    title="Remove selected pages"
+                    title={locked ? (desktopShell ? LOCKED_PAGES : LOCKED_PAGES_BROWSER) : "Remove selected pages"}
                     aria-label="Remove selected pages"
                     onClick={() => {
                       const indices = chosen();
@@ -676,7 +713,7 @@ export function Reader() {
                     type="button"
                     className="q-btn icon"
                     disabled={busy}
-                    title="Rotate left"
+                    title={locked ? (desktopShell ? LOCKED_PAGES : LOCKED_PAGES_BROWSER) : "Rotate left"}
                     aria-label="Rotate left"
                     onClick={() => void edit((bytes) => rotatePages(bytes, chosen(), -90))}
                   >
@@ -686,7 +723,7 @@ export function Reader() {
                     type="button"
                     className="q-btn icon"
                     disabled={busy}
-                    title="Rotate right"
+                    title={locked ? (desktopShell ? LOCKED_PAGES : LOCKED_PAGES_BROWSER) : "Rotate right"}
                     aria-label="Rotate right"
                     onClick={() => void edit((bytes) => rotatePages(bytes, chosen(), 90))}
                   >
@@ -774,7 +811,7 @@ export function Reader() {
                       <ChevronRight {...icon} />
                     </button>
                   </span>
-                  <button type="button" className="q-btn" onClick={enterFill}>
+                  <button type="button" className="q-btn" title={locked ? (desktopShell ? LOCKED_FIELDS : LOCKED_FIELDS_BROWSER) : "Fill the fields. Save a copy keeps them editable."} onClick={enterFill}>
                     Forms
                   </button>
                   <button type="button" className="q-btn" onClick={enterPresent}>
@@ -784,7 +821,7 @@ export function Reader() {
                     <Printer {...icon} />
                     Print
                   </button>
-                  <button type="button" className="q-btn primary" disabled={busy} onClick={saveCopy}>
+                  <button type="button" className="q-btn primary" disabled={busy} title={locked ? (desktopShell ? LOCKED_FIELDS : LOCKED_FIELDS_BROWSER) : "Save a copy. The fields stay editable."} onClick={saveCopy}>
                     <Download {...icon} />
                     Save a copy
                   </button>
@@ -792,7 +829,13 @@ export function Reader() {
               </>
             ) : null}
           </div>
-          {fillable ? (
+          {locked ? (
+            <p className="q-form-note">
+              {desktopShell
+                ? "This PDF is locked. You can still fill the existing fields, and Save a copy keeps them editable. A new text box can only be saved as a picture."
+                : "This PDF is locked. This browser can only save a picture of it. The Windows app can fill the existing fields and keep them editable. A new text box can only be saved as a picture."}
+            </p>
+          ) : fillable ? (
             <p className="q-form-note">
               This PDF has fillable fields. Use Forms to type on the page. Save a copy keeps the fields editable.
             </p>
@@ -991,6 +1034,7 @@ export function Reader() {
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
+      <LockedSaveDialog open={lockedPrompt} canKeepFields={desktopShell} onChoose={finishLockedChoice} />
       <Toaster position="bottom-center" toastOptions={{ className: "q-toast" }} />
     </div>
   );

@@ -37,6 +37,9 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
 
+      - name: Download PDFium
+        run: node scripts/fetch-pdfium.mjs
+
       - name: Build the NSIS installer and publish the release
         uses: tauri-apps/tauri-action@v0
         env:
