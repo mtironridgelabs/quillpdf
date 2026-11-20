@@ -103,7 +103,7 @@ export function InsertDialog({
                 <label className="q-page-field">
                   Insert before page
                   <input
-                    className="q-field"
+                    className="q-insert-page"
                     inputMode="numeric"
                     value={before}
                     onChange={(event) => setBefore(Number(event.target.value.replace(/\D/g, "")) || 1)}
