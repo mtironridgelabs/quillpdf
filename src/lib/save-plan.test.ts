@@ -9,6 +9,7 @@ import {
   TEXT_BOX_LOCKED,
   isOwnerLocked,
   planSave,
+  releasedCopyName,
   savedCopyMessage,
 } from "./save-plan.ts";
 
@@ -32,7 +33,8 @@ describe("locked form save", () => {
   });
 
   it("explains the choice when a save cannot keep the fields", () => {
-    assert.match(LOCKED_PAGES, /insert, remove, rotate/);
+    assert.match(LOCKED_PAGES, /unlocked copy/);
+    assert.match(LOCKED_PAGES, /flattened copy/);
     assert.match(LOCKED_PAGES_BROWSER, /Windows app/);
     assert.match(LOCKED_FIELDS, /picture/);
     assert.match(LOCKED_FIELDS_BROWSER, /picture/);
@@ -44,5 +46,8 @@ describe("locked form save", () => {
     assert.match(savedCopyMessage("picture-notes"), /cannot be edited later/);
     assert.match(savedCopyMessage("picture-failed", "Quill couldn't find its PDF library."), /PDF library/);
     assert.match(savedCopyMessage("picture-failed", "Quill couldn't find its PDF library."), /cannot be edited later/);
+    assert.equal(releasedCopyName("Contract.pdf", false), "Contract (unlocked).pdf");
+    assert.equal(releasedCopyName("Contract.PDF", true), "Contract (flattened).pdf");
+    assert.equal(releasedCopyName("notes", false), "notes (unlocked).pdf");
   });
 });

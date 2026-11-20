@@ -4,10 +4,10 @@ export function isOwnerLocked(permissions: number[] | null): boolean {
 }
 
 export const LOCKED_PAGES =
-  "This PDF is locked. Quill can fill the existing fields and save them, but it can't insert, remove, rotate, reorder, or extract pages. Those changes would rebuild the file and drop the fields.";
+  "This PDF is locked. Save an unlocked copy to keep the fields, or a flattened copy to paint the answers onto the pages. Then you can change the pages.";
 
 export const LOCKED_PAGES_BROWSER =
-  "This PDF is locked. This browser can't insert, remove, rotate, reorder, or extract pages. It also can't keep the fields editable. The Windows app can fill the existing fields and save them.";
+  "This PDF is locked. This browser can't change the pages. The Windows app can save an unlocked copy or a flattened copy so you can.";
 
 export const LOCKED_FIELDS =
   "Fill the existing fields. Save a copy keeps them editable. A new text box can only be saved as a picture, because this PDF is locked.";
@@ -49,6 +49,11 @@ export function planSave(input: {
   if (input.hasNotes) return { kind: "ask" };
   if (input.canPdfium && input.hasAnswers) return { kind: "pdfium" };
   return { kind: "picture", notice: "picture-browser" };
+}
+
+export function releasedCopyName(name: string, flatten: boolean): string {
+  const stem = name.replace(/\.pdf$/i, "").trim() || "document";
+  return `${stem} (${flatten ? "flattened" : "unlocked"}).pdf`;
 }
 
 export function savedCopyMessage(notice: SaveNotice, detail?: string): string {
