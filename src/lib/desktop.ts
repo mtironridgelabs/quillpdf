@@ -68,7 +68,8 @@ export async function fillLockedForm(
   bytes: Uint8Array,
   fields: Array<{ name: string; kind: string; value: string }>,
 ): Promise<Uint8Array> {
-  if (!desktopShell) throw new Error("Keeping a locked form editable is only available in the Windows app.");
+  if (!desktopShell)
+    throw new Error("Keeping a locked form editable is only available in the Windows app.");
   const { invoke } = await import("@tauri-apps/api/core");
   const base64 = await invoke<string>("fill_locked_form", {
     base64: bytesToBase64(bytes),
@@ -100,19 +101,26 @@ export async function destroyWindow(): Promise<void> {
   await getCurrentWindow().destroy();
 }
 
-/** Native save dialog. Returns the chosen path, or null when the user cancels. */
-export async function savePdfWithDialog(bytes: Uint8Array, filename: string): Promise<string | null> {
+/**
+ * Native save dialog, owned by the shell. The page never chooses the path.
+ * Returns the chosen path, or null when the user cancels.
+ */
+export async function savePdfWithDialog(
+  bytes: Uint8Array,
+  filename: string,
+): Promise<string | null> {
   if (!desktopShell) return null;
-  const { save } = await import("@tauri-apps/plugin-dialog");
   const { invoke } = await import("@tauri-apps/api/core");
   const suggested = filename.toLowerCase().endsWith(".pdf") ? filename : `${filename}.pdf`;
-  const path = await save({
-    defaultPath: suggested,
-    filters: [{ name: "PDF", extensions: ["pdf"] }],
-  });
-  if (path == null) return null;
-  await invoke("write_pdf_file", { path, base64: bytesToBase64(bytes) });
-  return path;
+  try {
+    return await invoke<string | null>("save_pdf_copy", {
+      filename: suggested,
+      base64: bytesToBase64(bytes),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(message);
+  }
 }
 
 export async function openDefaultApps(): Promise<void> {

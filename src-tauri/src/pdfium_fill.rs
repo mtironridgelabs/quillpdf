@@ -96,6 +96,7 @@ unsafe fn fill_with(
     }
 
     let mut form_info = Box::pin(FPDF_FORMFILLINFO {
+        // Version 2 matches the pdfium_8125 bindings. Newer DLLs still honor it.
         version: 2,
         Release: None,
         FFI_Invalidate: None,
@@ -113,7 +114,8 @@ unsafe fn fill_with(
         FFI_DoURIAction: None,
         FFI_DoGoToAction: None,
         m_pJsPlatform: ptr::null_mut(),
-        xfa_disabled: 0,
+        // XFA is a second form parser. Quill fills AcroForm fields, so it stays off.
+        xfa_disabled: 1,
         FFI_DisplayCaret: None,
         FFI_GetCurrentPageIndex: None,
         FFI_SetCurrentPage: None,
