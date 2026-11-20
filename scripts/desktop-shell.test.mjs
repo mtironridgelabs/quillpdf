@@ -23,10 +23,10 @@ describe("desktop shell contract", () => {
   const hooks = read("src-tauri/windows/hooks.nsh");
   const release = read(".github/workflows/release.yml");
 
-  it("keeps version 0.1.4 on the app, the shell, and the npm package", () => {
-    assert.equal(conf.version, "0.1.4");
-    assert.equal(pkg.version, "0.1.4");
-    assert.match(cargo, /^version = "0\.1\.4"$/m);
+  it("keeps version 1.0.0 on the app, the shell, and the npm package", () => {
+    assert.equal(conf.version, "1.0.0");
+    assert.equal(pkg.version, "1.0.0");
+    assert.match(cargo, /^version = "1\.0\.0"$/m);
   });
 
   it("names the per-user NSIS app Quill", () => {
@@ -76,15 +76,25 @@ describe("desktop shell contract", () => {
     assert.equal(jobBlock.includes("contents: read"), false);
   });
 
-  it("ships PDFium 8125 beside the app so a locked form can be saved", () => {
+  it("ships PDFium 8165 beside the app so a locked form can be saved", () => {
     assert.equal(conf.bundle.resources["resources/pdfium.dll"], "pdfium.dll");
     assert.match(cargo, /pdfium-render/);
     assert.match(cargo, /pdfium_8125/);
     assert.match(cargo, /thread_safe/);
-    assert.match(read("scripts/fetch-pdfium.mjs"), /const version = "8125"/);
-    assert.match(read("scripts/fetch-pdfium.mjs"), /chromium%2F\$\{version\}/);
-    assert.match(read("scripts/fetch-pdfium.mjs"), /pdfium-win-x64\.tgz/);
-    assert.equal(read("src-tauri/src/lib.rs").includes("fill_locked_form"), true);
+    const fetchScript = read("scripts/fetch-pdfium.mjs");
+    assert.match(fetchScript, /const version = "8165"/);
+    assert.match(fetchScript, /chromium%2F\$\{version\}/);
+    assert.match(fetchScript, /pdfium-win-x64\.tgz/);
+    const rust = read("src-tauri/src/lib.rs");
+    const fill = read("src-tauri/src/pdfium_fill.rs");
+    const capability = read("src-tauri/capabilities/default.json");
+    assert.equal(rust.includes("fill_locked_form"), true);
+    assert.equal(rust.includes("fn save_pdf_copy"), true);
+    assert.equal(rust.includes("fn write_pdf_file"), false);
+    assert.equal(fill.includes("xfa_disabled: 1"), true);
+    assert.equal(capability.includes("dialog:allow-save"), false);
+    assert.equal(read("src/lib/desktop.ts").includes("save_pdf_copy"), true);
+    assert.equal(read("src/lib/desktop.ts").includes("write_pdf_file"), false);
   });
 
   it("rejects a placeholder pubkey and a missing signing secret", () => {

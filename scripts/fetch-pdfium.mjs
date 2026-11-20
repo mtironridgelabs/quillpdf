@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 /**
- * Download the Windows PDFium build that matches pdfium-render's pdfium_8125 feature.
- * The release workflow runs this before `tauri build`. The DLL is not committed.
+ * Download the Windows PDFium build for the release.
+ * chromium/8165 is PDFium 160.0.8165.0 (16 November 2026), past the
+ * use-after-free fixed in Chrome 158.0.8127.36. The Rust bindings stay on
+ * pdfium-render's pdfium_8125 feature. The form-fill struct is passed as
+ * version 2, which that library still accepts. The DLL is not committed.
  */
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readdirSync, copyFileSync, rmSync, statSync } from "node:fs";
@@ -10,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const version = "8125";
+const version = "8165";
 const url = `https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F${version}/pdfium-win-x64.tgz`;
 const destDir = join(root, "src-tauri", "resources");
 const dest = join(destDir, "pdfium.dll");

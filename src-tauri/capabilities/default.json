@@ -1,14 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Quill's window. The shell can save a PDF, check for an update, and relaunch.",
+  "description": "Quill's window. Saving a PDF is done by the shell, which also checks for an update and relaunches.",
   "windows": ["main"],
   "permissions": [
     "core:default",
     "core:window:allow-close",
     "core:window:allow-destroy",
     "core:event:default",
-    "dialog:allow-save",
     "updater:default",
     "process:allow-restart"
   ]
