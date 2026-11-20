@@ -1,6 +1,6 @@
 {
   "name": "app-builder-workspace",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "sideEffects": false,
   "type": "module",
@@ -20,7 +20,7 @@
     "preview:stop": "node scripts/preview.mjs stop",
     "typecheck": "tsc --noEmit",
     "check:auth": "node scripts/check-auth-invariant.mjs",
-    "test": "node --test 'scripts/**/*.test.mjs' && node --experimental-strip-types --test src/lib/app-data/app-data.test.ts src/lib/app-data/readiness-schedule.test.ts src/lib/auth/gate-identity.test.ts src/lib/auth/sign-in-gate.test.ts src/lib/preview-path-prefix.test.ts src/lib/desktop-bytes.test.ts src/lib/save-plan.test.ts",
+    "test": "node --test 'scripts/**/*.test.mjs' && node --experimental-strip-types --test src/lib/app-data/app-data.test.ts src/lib/app-data/readiness-schedule.test.ts src/lib/auth/gate-identity.test.ts src/lib/auth/sign-in-gate.test.ts src/lib/preview-path-prefix.test.ts src/lib/desktop-bytes.test.ts src/lib/save-plan.test.ts src/lib/pdf-ops.test.ts",
     "lint": "eslint .",
     "format": "prettier --write ."
   },

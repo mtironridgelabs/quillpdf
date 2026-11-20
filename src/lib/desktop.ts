@@ -77,6 +77,13 @@ export async function fillLockedForm(
   return base64ToBytes(base64);
 }
 
+/** Close the window without asking again. Used after the unsaved-changes dialog. */
+export async function destroyWindow(): Promise<void> {
+  if (!desktopShell) return;
+  const { getCurrentWindow } = await import("@tauri-apps/api/window");
+  await getCurrentWindow().destroy();
+}
+
 /** Native save dialog. Returns false when the user cancels. */
 export async function savePdfWithDialog(bytes: Uint8Array, filename: string): Promise<boolean> {
   if (!desktopShell) return false;

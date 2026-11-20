@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { PDFDocument, StandardFonts } from "pdf-lib";
-import { extractPages, flattenDocument, insertPages, movePage, removePages, rotatePages } from "./pdf-ops.ts";
+import { PDFCheckBox, PDFDocument, PDFTextField, StandardFonts } from "pdf-lib";
+import { pageMove } from "./page-move.ts";
+import { extractPages, flattenDocument, insertPages, movePage, movePages, removePages, rotatePages } from "./pdf-ops.ts";
 import { applyFill } from "./pdf-fill.ts";
 
 async function makeDoc(labels: string[]) {
@@ -12,6 +13,30 @@ async function makeDoc(labels: string[]) {
     page.drawText(label, { x: 72, y: 700, size: 24, font });
   }
   return doc.save();
+}
+
+async function formDoc(name: string, value: string, label: string) {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([612, 792]);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  page.drawText(label, { x: 72, y: 740, size: 18, font });
+  const form = doc.getForm();
+  const text = form.createTextField(name);
+  text.setText(value);
+  text.addToPage(page, { x: 72, y: 700, width: 200, height: 24, font });
+  const box = form.createCheckBox("Checking");
+  box.addToPage(page, { x: 72, y: 660, width: 18, height: 18 });
+  box.check();
+  return doc.save();
+}
+
+async function fieldReport(bytes: Uint8Array) {
+  const doc = await PDFDocument.load(bytes);
+  return doc.getForm().getFields().map((field) => {
+    if (field instanceof PDFCheckBox) return `${field.getName()}=${field.isChecked() ? "yes" : "no"}`;
+    if (field instanceof PDFTextField) return `${field.getName()}=${field.getText() ?? ""}`;
+    return `${field.getName()}=`;
+  });
 }
 
 describe("pdf page desk", () => {
@@ -47,39 +72,70 @@ describe("pdf page desk", () => {
     assert.equal(doc.getPage(3).getRotation().angle, 0);
   });
 
-  it("bakes fillable fields into an insert, an extract, and a saved copy", async () => {
-    const formDoc = await PDFDocument.create();
-    const page = formDoc.addPage([612, 792]);
-    const form = formDoc.getForm();
-    const name = form.createTextField("Client.Name");
-    name.setText("Ada");
-    name.addToPage(page, { x: 72, y: 700, width: 160, height: 24 });
-    const formBytes = await formDoc.save();
+  it("keeps a text field and a checkbox fillable after extract, insert, and reorder", async () => {
+    const formBytes = await formDoc("Client.Name", "Ada", "Form");
+    const extracted = await extractPages(formBytes, [0]);
+    assert.deepEqual(await fieldReport(extracted), ["Client.Name=Ada", "Checking=yes"]);
 
+    const cover = await makeDoc(["Cover"]);
+    const inserted = await insertPages(cover, formBytes, [0], 1);
+    assert.equal((await PDFDocument.load(inserted)).getPageCount(), 2);
+    assert.deepEqual(await fieldReport(inserted), ["Client.Name=Ada", "Checking=yes"]);
+
+    const combined = await PDFDocument.load(formBytes);
+    const [coverPage] = await combined.copyPages(await PDFDocument.load(cover), [0]);
+    combined.insertPage(0, coverPage);
+    const moved = await movePages(await combined.save(), [0], 1);
+    assert.deepEqual(await fieldReport(moved), ["Client.Name=Ada", "Checking=yes"]);
+    const rotated = await rotatePages(formBytes, [0], 90);
+    assert.deepEqual(await fieldReport(rotated), ["Client.Name=Ada", "Checking=yes"]);
+  });
+
+  it("renames an incoming field when the open file already uses that name", async () => {
+    const dest = await formDoc("Client.Name", "Ada", "Dest");
+    const source = await formDoc("Client.Name", "Bea", "Source");
+    const inserted = await insertPages(dest, source, [0], 1);
+    assert.deepEqual(await fieldReport(inserted), [
+      "Client.Name=Ada",
+      "Checking=yes",
+      "Client.Name.2=Bea",
+      "Checking.2=yes",
+    ]);
+  });
+
+  it("drops a field that lived only on a removed page and keeps the others", async () => {
+    const doc = await PDFDocument.create();
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const form = doc.getForm();
+    for (const label of ["A", "B"]) {
+      const page = doc.addPage([612, 792]);
+      page.drawText(label, { x: 72, y: 740, size: 18, font });
+      const text = form.createTextField(`Page.${label}`);
+      text.setText(label);
+      text.addToPage(page, { x: 72, y: 680, width: 120, height: 24, font });
+    }
+    const bytes = await doc.save();
+    const removed = await removePages(bytes, [0]);
+    assert.equal((await PDFDocument.load(removed)).getPageCount(), 1);
+    assert.deepEqual(await fieldReport(removed), ["Page.B=B"]);
+  });
+
+  it("still flattens when asked, and leaves a file with no form alone", async () => {
+    const formBytes = await formDoc("Client.Name", "Ada", "Form");
     const saved = await flattenDocument(formBytes);
     assert.notEqual(saved, formBytes);
     assert.equal((await PDFDocument.load(saved)).getForm().getFields().length, 0);
-
     const plain = await makeDoc(["Cover"]);
-    const inserted = await insertPages(plain, formBytes, [0], 1);
-    assert.equal((await PDFDocument.load(inserted)).getPageCount(), 2);
-    assert.equal((await PDFDocument.load(inserted)).getForm().getFields().length, 0);
-
-    const extracted = await extractPages(formBytes, [0]);
-    assert.equal((await PDFDocument.load(extracted)).getPageCount(), 1);
-    assert.equal((await PDFDocument.load(extracted)).getForm().getFields().length, 0);
-
-    const untouched = await flattenDocument(plain);
-    assert.equal(untouched, plain);
+    assert.equal(await flattenDocument(plain), plain);
   });
 
   it("keeps a filled field editable and turns a text box into a field", async () => {
-    const formDoc = await PDFDocument.create();
-    const page = formDoc.addPage([612, 792]);
-    const form = formDoc.getForm();
-    const name = form.createTextField("Client.Name");
+    const form = await PDFDocument.create();
+    const page = form.addPage([612, 792]);
+    const fields = form.getForm();
+    const name = fields.createTextField("Client.Name");
     name.addToPage(page, { x: 72, y: 700, width: 160, height: 24 });
-    const bytes = await formDoc.save();
+    const bytes = await form.save();
     const filled = await applyFill(
       bytes,
       [{ name: "Client.Name", kind: "text", value: "Ada", page: 1, rect: [72, 700, 232, 724] }],
@@ -113,5 +169,22 @@ describe("pdf page desk", () => {
     assert.equal(doc.getPageCount(), 3);
     assert.equal(doc.getPage(0).getRotation().angle, 0);
     assert.equal(doc.getPage(2).getRotation().angle, 90);
+    const block = await movePages(bytes, [0], 2);
+    const after = await PDFDocument.load(block);
+    assert.equal(after.getPage(2).getRotation().angle, 90);
+  });
+});
+
+describe("thumbnail drag", () => {
+  it("moves a single page to the gap the pointer is over", () => {
+    assert.deepEqual(pageMove(3, [0], 3), { indices: [0], dest: 2 });
+    assert.equal(pageMove(3, [0], 1), null);
+    assert.deepEqual(pageMove(4, [2], 0), { indices: [2], dest: 0 });
+  });
+
+  it("moves a selected group as one block and keeps their order", () => {
+    assert.deepEqual(pageMove(4, [2, 0], 4), { indices: [0, 2], dest: 2 });
+    assert.deepEqual(pageMove(4, [1, 2], 0), { indices: [1, 2], dest: 0 });
+    assert.equal(pageMove(4, [1, 2], 2), null);
   });
 });

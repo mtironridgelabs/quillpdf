@@ -27,11 +27,12 @@ import { appUrl } from "@/lib/app-url";
 import {
   extractPages,
   insertPages,
-  movePage,
+  movePages,
   pageListLabel,
   removePages,
   rotatePages,
 } from "@/lib/pdf-ops";
+import { pageMove } from "@/lib/page-move";
 import { NOTE_HEIGHT, NOTE_SIZE, NOTE_WIDTH, type StampNote } from "@/lib/pdf-fill";
 import { fieldsFromValues } from "@/lib/raster-fill";
 import { buildSavedCopy } from "@/lib/save-copy";
@@ -40,6 +41,7 @@ import { openPdfDocument } from "@/lib/pdfjs-client";
 import {
   checkAndInstallUpdate,
   desktopShell,
+  destroyWindow,
   dismissDefaultAppsPrompt,
   fillLockedForm,
   listenForOpenedPdfs,
@@ -85,6 +87,13 @@ export function Reader() {
   const [pageText, setPageText] = useState("1");
   const [selected, setSelected] = useState<number[]>([]);
   const [dirty, setDirty] = useState(false);
+  const dirtyRef = useRef(false);
+  dirtyRef.current = dirty;
+  const leaveIntent = useRef<"document" | "window" | "update">("document");
+  const [leaveKind, setLeaveKind] = useState<"document" | "window" | "update">("document");
+  const leavingRef = useRef(false);
+  const allowClose = useRef(false);
+  const runUpdateRef = useRef<() => Promise<void>>(async () => {});
   const [canUndo, setCanUndo] = useState(false);
   const [busy, setBusy] = useState(false);
   const [mode, setMode] = useState<ViewMode>("fit-width");
@@ -98,6 +107,7 @@ export function Reader() {
   const [insertBefore, setInsertBefore] = useState(2);
   const [pending, setPending] = useState<Pending | null>(null);
   const [leaving, setLeaving] = useState(false);
+  leavingRef.current = leaving;
   const [dragging, setDragging] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [askDefaultApps, setAskDefaultApps] = useState(false);
@@ -410,6 +420,7 @@ export function Reader() {
     setPresenting(false);
     setPage(1);
     setPending(null);
+    leavingRef.current = false;
     setLeaving(false);
     void previous?.destroy();
   }, []);
@@ -417,11 +428,50 @@ export function Reader() {
   const requestClose = useCallback(() => {
     if (!doc) return;
     if (dirty) {
+      leaveIntent.current = "document";
+      setLeaveKind("document");
+      leavingRef.current = true;
       setLeaving(true);
       return;
     }
     closeDoc();
   }, [closeDoc, dirty, doc]);
+
+  const finishLeave = useCallback(
+    (action: "keep" | "discard" | "save") => {
+      const intent = leaveIntent.current;
+      if (action === "keep") {
+        leavingRef.current = false;
+        setLeaving(false);
+        return;
+      }
+      const done = () => {
+        leavingRef.current = false;
+        setLeaving(false);
+        if (intent === "window") {
+          allowClose.current = true;
+          void destroyWindow();
+          return;
+        }
+        if (intent === "update") {
+          allowClose.current = true;
+          void runUpdateRef.current().finally(() => {
+            allowClose.current = false;
+          });
+          return;
+        }
+        closeDoc();
+      };
+      if (action === "discard") {
+        done();
+        return;
+      }
+      void saveCopy().then((saved) => {
+        if (saved) done();
+      });
+    },
+    [closeDoc, saveCopy],
+  );
 
   const pen = PENS.find((item) => item.id === penId) ?? PENS[3];
 
@@ -467,11 +517,41 @@ export function Reader() {
   }, []);
 
   useEffect(() => {
+    if (!desktopShell) return;
+    let stop = () => {};
+    let cancelled = false;
+    void import("@tauri-apps/api/window")
+      .then(({ getCurrentWindow }) =>
+        getCurrentWindow().onCloseRequested((event) => {
+          if (allowClose.current) return;
+          if (!dirtyRef.current && !leavingRef.current) return;
+          event.preventDefault();
+          if (leavingRef.current) return;
+          leaveIntent.current = "window";
+          setLeaveKind("window");
+          leavingRef.current = true;
+          setLeaving(true);
+        }),
+      )
+      .then((unlisten) => {
+        if (cancelled) unlisten();
+        else stop = unlisten;
+      })
+      .catch(() => {
+        // The browser preview has no window to hold.
+      });
+    return () => {
+      cancelled = true;
+      stop();
+    };
+  }, []);
+
+  useEffect(() => {
     if (shouldPromptForDefaultApps()) setAskDefaultApps(true);
   }, []);
 
-  const onUpdate = useCallback(async () => {
-    if (!desktopShell || updating) return;
+  const runUpdate = useCallback(async () => {
+    if (updating) return;
     setUpdating(true);
     try {
       const result = await checkAndInstallUpdate();
@@ -482,6 +562,19 @@ export function Reader() {
       setUpdating(false);
     }
   }, [updating]);
+  runUpdateRef.current = runUpdate;
+
+  const onUpdate = useCallback(() => {
+    if (!desktopShell || updating) return;
+    if (dirtyRef.current) {
+      leaveIntent.current = "update";
+      setLeaveKind("update");
+      leavingRef.current = true;
+      setLeaving(true);
+      return;
+    }
+    void runUpdate();
+  }, [runUpdate, updating]);
 
   const finishDefaultApps = useCallback((openSettings: boolean) => {
     dismissDefaultAppsPrompt();
@@ -681,7 +774,7 @@ export function Reader() {
                     type="button"
                     className="q-btn"
                     disabled={busy}
-                    title={locked ? (desktopShell ? LOCKED_PAGES : LOCKED_PAGES_BROWSER) : "Insert pages from another PDF"}
+                    title={locked ? (desktopShell ? LOCKED_PAGES : LOCKED_PAGES_BROWSER) : "Insert pages from another PDF. Fillable fields come with the pages."}
                     onClick={() => {
                       setInsertBefore(Math.min(numPages + 1, page + 1));
                       setInsertOpen(true);
@@ -689,7 +782,7 @@ export function Reader() {
                   >
                     Insert
                   </button>
-                  <button type="button" className="q-btn" disabled={busy} title={locked ? (desktopShell ? LOCKED_PAGES : LOCKED_PAGES_BROWSER) : "Extract selected pages"} onClick={() => void extract()}>
+                  <button type="button" className="q-btn" disabled={busy} title={locked ? (desktopShell ? LOCKED_PAGES : LOCKED_PAGES_BROWSER) : "Extract selected pages. Fillable fields come with the pages."} onClick={() => void extract()}>
                     <FileOutput {...icon} />
                     Extract
                   </button>
@@ -869,7 +962,11 @@ export function Reader() {
                 });
                 if (!event.shiftKey && !event.metaKey && !event.ctrlKey) anchor.current = index;
               }}
-              onMove={(from, to) => void edit((bytes) => movePage(bytes, from, to), to + 1)}
+              onReorder={(moving, insertAt) => {
+                const plan = pageMove(numPages, moving, insertAt);
+                if (!plan) return;
+                void edit((bytes) => movePages(bytes, plan.indices, plan.dest), plan.dest + 1);
+              }}
             />
           )}
           <Stage
@@ -902,11 +999,16 @@ export function Reader() {
                     },
                     onNoteMove: (id, x, y) => {
                       setNotes((current) => current.map((note) => (note.id === id ? { ...note, x, y } : note)));
+                      setDirty(true);
                     },
                     onNoteResize: (id, width, height) => {
                       setNotes((current) => current.map((note) => (note.id === id ? { ...note, width, height } : note)));
+                      setDirty(true);
                     },
-                    onNoteRemove: (id) => setNotes((current) => current.filter((note) => note.id !== id)),
+                    onNoteRemove: (id) => {
+                      setNotes((current) => current.filter((note) => note.id !== id));
+                      setDirty(true);
+                    },
                   }
                 : null
             }
@@ -954,7 +1056,14 @@ export function Reader() {
         }}
       />
 
-      <Dialog.Root open={leaving} onOpenChange={(next) => !next && setLeaving(false)}>
+      <Dialog.Root
+        open={leaving}
+        onOpenChange={(next) => {
+          if (next) return;
+          leavingRef.current = false;
+          setLeaving(false);
+        }}
+      >
         <Dialog.Portal>
           <Dialog.Overlay className="q-overlay" />
           <Dialog.Content className="q-dialog">
@@ -963,21 +1072,13 @@ export function Reader() {
             </Dialog.Title>
             <Dialog.Description>This PDF has changes that are not in a saved copy.</Dialog.Description>
             <div className="q-dialog-actions">
-              <button type="button" className="q-btn" onClick={() => setLeaving(false)}>
+              <button type="button" className="q-btn" onClick={() => finishLeave("keep")}>
                 Keep editing
               </button>
-              <button type="button" className="q-btn" onClick={closeDoc}>
-                Close without saving
+              <button type="button" className="q-btn" onClick={() => finishLeave("discard")}>
+                {leaveKind === "update" ? "Update without saving" : "Close without saving"}
               </button>
-              <button
-                type="button"
-                className="q-btn primary"
-                onClick={() => {
-                  void saveCopy().then((saved) => {
-                    if (saved) closeDoc();
-                  });
-                }}
-              >
+              <button type="button" className="q-btn primary" onClick={() => finishLeave("save")}>
                 Save a copy
               </button>
             </div>
