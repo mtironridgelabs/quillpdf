@@ -23,10 +23,10 @@ describe("desktop shell contract", () => {
   const hooks = read("src-tauri/windows/hooks.nsh");
   const release = read(".github/workflows/release.yml");
 
-  it("keeps version 0.1.3 on the app, the shell, and the npm package", () => {
-    assert.equal(conf.version, "0.1.3");
-    assert.equal(pkg.version, "0.1.3");
-    assert.match(cargo, /^version = "0\.1\.3"$/m);
+  it("keeps version 0.1.4 on the app, the shell, and the npm package", () => {
+    assert.equal(conf.version, "0.1.4");
+    assert.equal(pkg.version, "0.1.4");
+    assert.match(cargo, /^version = "0\.1\.4"$/m);
   });
 
   it("names the per-user NSIS app Quill", () => {

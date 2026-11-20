@@ -132,6 +132,29 @@ fn fill_locked_form(app: AppHandle, base64: String, fields: Vec<LockedField>) ->
     Ok(base64::engine::general_purpose::STANDARD.encode(saved))
 }
 
+#[tauri::command]
+fn release_locked_form(
+    app: AppHandle,
+    base64: String,
+    fields: Vec<LockedField>,
+    flatten: bool,
+) -> Result<String, String> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(base64.trim())
+        .map_err(|_| "Couldn't read the PDF bytes.".to_string())?;
+    let library = pdfium_library(&app)?;
+    let writes: Vec<pdfium_fill::FieldWrite> = fields
+        .iter()
+        .map(|field| pdfium_fill::FieldWrite {
+            name: field.name.as_str(),
+            kind: field.kind.as_str(),
+            value: field.value.as_str(),
+        })
+        .collect();
+    let saved = pdfium_fill::release_locked_form(&library, &bytes, &writes, flatten)?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(saved))
+}
+
 fn pdfium_library(app: &AppHandle) -> Result<PathBuf, String> {
     let file_name = if cfg!(windows) {
         "pdfium.dll"
@@ -193,6 +216,7 @@ pub fn run() {
             take_opened_pdf,
             write_pdf_file,
             fill_locked_form,
+            release_locked_form,
             open_default_apps
         ])
         .run(tauri::generate_context!())

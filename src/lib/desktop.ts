@@ -77,6 +77,22 @@ export async function fillLockedForm(
   return base64ToBytes(base64);
 }
 
+/** Drop an owner lock. Flatten paints the fields onto the pages first. Windows only. */
+export async function releaseLockedForm(
+  bytes: Uint8Array,
+  fields: Array<{ name: string; kind: string; value: string }>,
+  flatten: boolean,
+): Promise<Uint8Array> {
+  if (!desktopShell) throw new Error("Removing a lock is only available in the Windows app.");
+  const { invoke } = await import("@tauri-apps/api/core");
+  const base64 = await invoke<string>("release_locked_form", {
+    base64: bytesToBase64(bytes),
+    fields: fields.map((field) => ({ name: field.name, kind: field.kind, value: field.value })),
+    flatten,
+  });
+  return base64ToBytes(base64);
+}
+
 /** Close the window without asking again. Used after the unsaved-changes dialog. */
 export async function destroyWindow(): Promise<void> {
   if (!desktopShell) return;
@@ -84,9 +100,9 @@ export async function destroyWindow(): Promise<void> {
   await getCurrentWindow().destroy();
 }
 
-/** Native save dialog. Returns false when the user cancels. */
-export async function savePdfWithDialog(bytes: Uint8Array, filename: string): Promise<boolean> {
-  if (!desktopShell) return false;
+/** Native save dialog. Returns the chosen path, or null when the user cancels. */
+export async function savePdfWithDialog(bytes: Uint8Array, filename: string): Promise<string | null> {
+  if (!desktopShell) return null;
   const { save } = await import("@tauri-apps/plugin-dialog");
   const { invoke } = await import("@tauri-apps/api/core");
   const suggested = filename.toLowerCase().endsWith(".pdf") ? filename : `${filename}.pdf`;
@@ -94,9 +110,9 @@ export async function savePdfWithDialog(bytes: Uint8Array, filename: string): Pr
     defaultPath: suggested,
     filters: [{ name: "PDF", extensions: ["pdf"] }],
   });
-  if (path == null) return false;
+  if (path == null) return null;
   await invoke("write_pdf_file", { path, base64: bytesToBase64(bytes) });
-  return true;
+  return path;
 }
 
 export async function openDefaultApps(): Promise<void> {

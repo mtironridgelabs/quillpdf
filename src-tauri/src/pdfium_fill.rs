@@ -1,5 +1,7 @@
 //! Write existing AcroForm values the way Edge does: the form filler, not a raw /V.
-//! Save flags stay 0, so an owner lock is kept and the fields stay editable.
+//! A normal save uses flags 0, so an owner lock is kept and the fields stay editable.
+//! Releasing the lock saves with FPDF_REMOVE_SECURITY (3). Flattening paints the fields
+//! onto the pages first, then removes the lock.
 
 use std::io::{self, Write};
 use std::os::raw::{c_int, c_ulong, c_void};
@@ -12,6 +14,16 @@ use pdfium_render::prelude::*;
 const FORMFIELD_TEXT: c_int = 6;
 const FORMFIELD_CHECKBOX: c_int = 2;
 const ANNOT_WIDGET: i32 = 20;
+/// pdfium public/fpdf_flatten.h. 0 is normal display, not print.
+const FLAT_NORMALDISPLAY: c_int = 0;
+const FLATTEN_FAIL: c_int = 0;
+
+#[derive(Clone, Copy)]
+enum SaveMode {
+    Keep,
+    Unlock,
+    Flatten,
+}
 
 pub struct FieldWrite<'a> {
     pub name: &'a str,
@@ -22,6 +34,27 @@ pub struct FieldWrite<'a> {
 static PDFIUM: Mutex<Option<Pdfium>> = Mutex::new(None);
 
 pub fn fill_locked_form(library: &Path, bytes: &[u8], fields: &[FieldWrite<'_>]) -> Result<Vec<u8>, String> {
+    run_pdfium(library, bytes, |bindings| unsafe {
+        fill_with(bindings, bytes, fields, SaveMode::Keep)
+    })
+}
+
+/// Save a copy that is no longer owner-locked. `flatten` paints the fields onto the pages first.
+pub fn release_locked_form(
+    library: &Path,
+    bytes: &[u8],
+    fields: &[FieldWrite<'_>],
+    flatten: bool,
+) -> Result<Vec<u8>, String> {
+    let mode = if flatten { SaveMode::Flatten } else { SaveMode::Unlock };
+    run_pdfium(library, bytes, |bindings| unsafe { fill_with(bindings, bytes, fields, mode) })
+}
+
+fn run_pdfium<T>(
+    library: &Path,
+    bytes: &[u8],
+    run: impl FnOnce(&dyn PdfiumLibraryBindings) -> Result<T, String>,
+) -> Result<T, String> {
     if bytes.is_empty() {
         return Err("Quill couldn't read this PDF.".into());
     }
@@ -33,8 +66,8 @@ pub fn fill_locked_form(library: &Path, bytes: &[u8], fields: &[FieldWrite<'_>])
         *slot = Some(Pdfium::new(bindings));
     }
     let pdfium = slot.as_ref().expect("pdfium");
-    // The lock is held for the whole fill. PDFium is not re-entrant between calls.
-    unsafe { fill_with(pdfium.bindings(), bytes, fields) }
+    // The lock is held for the whole call. PDFium is not re-entrant between calls.
+    run(pdfium.bindings())
 }
 
 fn library_error(err: &PdfiumError) -> String {
@@ -51,6 +84,7 @@ unsafe fn fill_with(
     bindings: &dyn PdfiumLibraryBindings,
     bytes: &[u8],
     fields: &[FieldWrite<'_>],
+    mode: SaveMode,
 ) -> Result<Vec<u8>, String> {
     let document = bindings.FPDF_LoadMemDocument64(bytes, Some(""));
     if document.is_null() {
@@ -99,16 +133,13 @@ unsafe fn fill_with(
         FFI_DoURIActionWithKeyboardModifier: None,
     });
 
-    let form = bindings.FPDFDOC_InitFormFillEnvironment(
-        document,
-        form_info.as_mut().get_unchecked_mut(),
-    );
+    let form = bindings.FPDFDOC_InitFormFillEnvironment(document, form_info.as_mut().get_unchecked_mut());
     if form.is_null() {
         bindings.FPDF_CloseDocument(document);
         return Err("Quill couldn't read the form in this PDF.".into());
     }
 
-    let result = fill_document(bindings, document, form, fields);
+    let result = fill_document(bindings, document, form, fields, mode);
     bindings.FPDFDOC_ExitFormFillEnvironment(form);
     bindings.FPDF_CloseDocument(document);
     // Keep the form-fill struct alive until Exit returns.
@@ -121,6 +152,7 @@ unsafe fn fill_document(
     document: FPDF_DOCUMENT,
     form: FPDF_FORMHANDLE,
     fields: &[FieldWrite<'_>],
+    mode: SaveMode,
 ) -> Result<Vec<u8>, String> {
     let page_count = bindings.FPDF_GetPageCount(document);
     if page_count < 1 {
@@ -172,11 +204,19 @@ unsafe fn fill_document(
         }
     }
 
-    let saved = if fields.is_empty() || written > 0 {
-        save_copy(bindings, document)
-    } else {
-        Err("Quill couldn't find those fields in this PDF.".into())
-    };
+    let saved = (|| {
+        if !fields.is_empty() && written == 0 {
+            return Err("Quill couldn't find those fields in this PDF.".into());
+        }
+        if matches!(mode, SaveMode::Flatten) {
+            for page in &pages {
+                if bindings.FPDFPage_Flatten(*page, FLAT_NORMALDISPLAY) == FLATTEN_FAIL {
+                    return Err("Quill couldn't flatten this PDF.".into());
+                }
+            }
+        }
+        save_copy(bindings, document, !matches!(mode, SaveMode::Keep))
+    })();
     close_pages(bindings, form, &pages);
     saved
 }
@@ -193,8 +233,7 @@ unsafe fn write_text(
     name: &str,
     value: &str,
 ) -> bool {
-    let Some((page, annot)) = find_widget(bindings, form, pages, name, Some(FORMFIELD_TEXT))
-    else {
+    let Some((page, annot)) = find_widget(bindings, form, pages, name, Some(FORMFIELD_TEXT)) else {
         return false;
     };
     let focused = bindings.FORM_SetFocusedAnnot(form, annot);
@@ -216,8 +255,7 @@ unsafe fn write_checkbox(
     name: &str,
     checked: bool,
 ) -> bool {
-    let Some((page, annot)) = find_widget(bindings, form, pages, name, Some(FORMFIELD_CHECKBOX))
-    else {
+    let Some((page, annot)) = find_widget(bindings, form, pages, name, Some(FORMFIELD_CHECKBOX)) else {
         return false;
     };
     let already = bindings.is_true(bindings.FPDFAnnot_IsChecked(form, annot));
@@ -269,9 +307,7 @@ unsafe fn find_widget(
                     continue;
                 }
             }
-            let found = read_wide(|buffer, len| {
-                bindings.FPDFAnnot_GetFormFieldName(form, annot, buffer, len)
-            });
+            let found = read_wide(|buffer, len| bindings.FPDFAnnot_GetFormFieldName(form, annot, buffer, len));
             if found == name {
                 return Some((*page, annot));
             }
@@ -306,20 +342,28 @@ unsafe fn close_pages(bindings: &dyn PdfiumLibraryBindings, form: FPDF_FORMHANDL
     }
 }
 
-unsafe fn save_copy(bindings: &dyn PdfiumLibraryBindings, document: FPDF_DOCUMENT) -> Result<Vec<u8>, String> {
+unsafe fn save_copy(
+    bindings: &dyn PdfiumLibraryBindings,
+    document: FPDF_DOCUMENT,
+    remove_security: bool,
+) -> Result<Vec<u8>, String> {
     let mut cursor = io::Cursor::new(Vec::new());
     let mut writer = FileWriter {
         version: 1,
         write_block: Some(write_block),
         output: &mut cursor,
     };
-    let ok = bindings.FPDF_SaveAsCopy(document, writer.as_file_write(), 0);
+    // 3 is FPDF_REMOVE_SECURITY. 0 keeps the owner lock.
+    let flags = if remove_security { 3 } else { 0 };
+    let ok = bindings.FPDF_SaveAsCopy(document, writer.as_file_write(), flags);
     if !bindings.is_true(ok) {
         let code = bindings.FPDF_GetLastError() as u64;
         let detail = if code == 0 { String::new() } else { format!(" ({code})") };
         return Err(format!("Quill couldn't save this locked PDF{detail}."));
     }
-    cursor.flush().map_err(|err| format!("Quill couldn't save this locked PDF ({err})."))?;
+    cursor
+        .flush()
+        .map_err(|err| format!("Quill couldn't save this locked PDF ({err})."))?;
     let bytes = cursor.into_inner();
     if bytes.len() < 8 || &bytes[..4] != b"%PDF" {
         return Err("Quill couldn't save this locked PDF.".into());

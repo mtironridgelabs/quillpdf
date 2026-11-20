@@ -21,6 +21,7 @@ import { Toaster, toast } from "sonner";
 import * as Dialog from "@radix-ui/react-dialog";
 import { InsertDialog } from "@/components/quire/insert-dialog";
 import { LockedSaveDialog, type LockedChoice } from "@/components/quire/locked-save-dialog";
+import { LockedPagesDialog } from "@/components/quire/locked-pages-dialog";
 import { Sidebar } from "@/components/quire/sidebar";
 import { Stage, type InkStroke, type ViewMode } from "@/components/quire/stage";
 import { appUrl } from "@/lib/app-url";
@@ -36,7 +37,7 @@ import { pageMove } from "@/lib/page-move";
 import { NOTE_HEIGHT, NOTE_SIZE, NOTE_WIDTH, type StampNote } from "@/lib/pdf-fill";
 import { fieldsFromValues } from "@/lib/raster-fill";
 import { buildSavedCopy } from "@/lib/save-copy";
-import { isOwnerLocked, LOCKED_FIELDS, LOCKED_FIELDS_BROWSER, LOCKED_PAGES, LOCKED_PAGES_BROWSER, savedCopyMessage, TEXT_BOX, TEXT_BOX_LOCKED } from "@/lib/save-plan";
+import { isOwnerLocked, LOCKED_FIELDS, LOCKED_FIELDS_BROWSER, LOCKED_PAGES, LOCKED_PAGES_BROWSER, releasedCopyName, savedCopyMessage, TEXT_BOX, TEXT_BOX_LOCKED } from "@/lib/save-plan";
 import { openPdfDocument } from "@/lib/pdfjs-client";
 import {
   checkAndInstallUpdate,
@@ -46,6 +47,7 @@ import {
   fillLockedForm,
   listenForOpenedPdfs,
   openDefaultApps,
+  releaseLockedForm,
   savePdfWithDialog,
   shouldPromptForDefaultApps,
 } from "@/lib/desktop";
@@ -114,6 +116,7 @@ export function Reader() {
   const [fillable, setFillable] = useState(false);
   const [locked, setLocked] = useState(false);
   const [lockedPrompt, setLockedPrompt] = useState(false);
+  const [pageLock, setPageLock] = useState(false);
   const [filling, setFilling] = useState(false);
   const [placing, setPlacing] = useState(false);
   const [focusNote, setFocusNote] = useState("");
@@ -225,7 +228,7 @@ export function Reader() {
       const bytes = bytesRef.current;
       if (!bytes || busyRef.current) return false;
       if (lockedRef.current) {
-        toast.error(desktopShell ? LOCKED_PAGES : LOCKED_PAGES_BROWSER);
+        setPageLock(true);
         return false;
       }
       busyRef.current = true;
@@ -329,7 +332,7 @@ export function Reader() {
     const bytes = bytesRef.current;
     if (!bytes || busyRef.current) return;
     if (lockedRef.current) {
-      toast.error(desktopShell ? LOCKED_PAGES : LOCKED_PAGES_BROWSER);
+      setPageLock(true);
       return;
     }
     const indices = chosen();
@@ -352,6 +355,48 @@ export function Reader() {
       setBusy(false);
     }
   }, [chosen]);
+
+  const releaseLocked = useCallback(
+    async (flatten: boolean) => {
+      const bytes = bytesRef.current;
+      const pdf = pdfRef.current;
+      if (!bytes || !pdf || busyRef.current || !desktopShell) return;
+      busyRef.current = true;
+      setBusy(true);
+      try {
+        const answers = await fieldsFromValues(pdf, fieldValuesRef.current);
+        const released = await releaseLockedForm(
+          bytes,
+          answers.map((field) => ({ name: field.name, kind: field.kind, value: field.value })),
+          flatten,
+        );
+        const suggested = releasedCopyName(nameRef.current, flatten);
+        const path = await savePdfWithDialog(released, suggested);
+        if (!path) return;
+        const savedName = path.split(/[/\\]/).pop() || suggested;
+        past.current = [];
+        setCanUndo(false);
+        setDirty(false);
+        setPageLock(false);
+        await show(savedName, released, pageRef.current);
+        if (lockedRef.current) {
+          toast.error("Quill saved the copy, but the lock is still on it.");
+          return;
+        }
+        toast.success(
+          flatten
+            ? "Saved a flattened copy. The form is gone, and you can change the pages now."
+            : "Saved an unlocked copy. The fields stay fillable, and you can change the pages now.",
+        );
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Quill couldn't save that copy.");
+      } finally {
+        busyRef.current = false;
+        setBusy(false);
+      }
+    },
+    [show],
+  );
 
   const onZoom = useCallback((factor: number) => {
     setZoom((value) => Math.min(3, Math.max(0.5, value * factor)));
@@ -422,6 +467,7 @@ export function Reader() {
     setPending(null);
     leavingRef.current = false;
     setLeaving(false);
+    setPageLock(false);
     void previous?.destroy();
   }, []);
 
@@ -776,6 +822,10 @@ export function Reader() {
                     disabled={busy}
                     title={locked ? (desktopShell ? LOCKED_PAGES : LOCKED_PAGES_BROWSER) : "Insert pages from another PDF. Fillable fields come with the pages."}
                     onClick={() => {
+                      if (locked) {
+                        setPageLock(true);
+                        return;
+                      }
                       setInsertBefore(Math.min(numPages + 1, page + 1));
                       setInsertOpen(true);
                     }}
@@ -1136,6 +1186,19 @@ export function Reader() {
         </Dialog.Portal>
       </Dialog.Root>
       <LockedSaveDialog open={lockedPrompt} canKeepFields={desktopShell} onChoose={finishLockedChoice} />
+      <LockedPagesDialog
+        open={pageLock}
+        canRelease={desktopShell}
+        hasNotes={notes.some((note) => note.text.trim().length > 0)}
+        busy={busy}
+        onChoose={(choice) => {
+          if (choice === "cancel") {
+            setPageLock(false);
+            return;
+          }
+          void releaseLocked(choice === "flatten");
+        }}
+      />
       <Toaster position="bottom-center" toastOptions={{ className: "q-toast" }} />
     </div>
   );
@@ -1186,7 +1249,7 @@ async function deliverBytes(bytes: Uint8Array, filename: string): Promise<boolea
     downloadBytes(bytes, filename);
     return true;
   }
-  return savePdfWithDialog(bytes, filename);
+  return (await savePdfWithDialog(bytes, filename)) != null;
 }
 
 function downloadBytes(bytes: Uint8Array, filename: string) {
