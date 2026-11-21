@@ -614,6 +614,24 @@
   cursor: crosshair;
 }
 
+.q-fill[data-editing="false"],
+.q-fill[data-editing="false"] .q-field,
+.q-fill[data-editing="false"] .q-note,
+.q-fill[data-editing="false"] .q-note textarea {
+  pointer-events: none;
+}
+
+.q-fill[data-editing="false"] .q-field {
+  box-shadow: none;
+  background: transparent;
+}
+
+.q-fill[data-editing="false"] .q-note-move,
+.q-fill[data-editing="false"] .q-note-x,
+.q-fill[data-editing="false"] .q-note-resize {
+  display: none;
+}
+
 .q-field,
 .q-note,
 .q-note textarea,

@@ -20,6 +20,7 @@ export function FillLayer({
   scale,
   values,
   notes,
+  editing,
   placing,
   focusId,
   onValue,
@@ -34,6 +35,7 @@ export function FillLayer({
   scale: number;
   values: Record<string, string>;
   notes: PageNote[];
+  editing: boolean;
   placing: boolean;
   focusId: string;
   onValue: (id: string, value: string) => void;
@@ -86,9 +88,10 @@ export function FillLayer({
   return (
     <div
       className="q-fill"
-      data-place={placing || undefined}
+      data-editing={editing ? "true" : "false"}
+      data-place={(editing && placing) || undefined}
       onPointerDown={(event) => {
-        if (!placing) return;
+        if (!editing || !placing) return;
         const target = event.target as HTMLElement;
         if (target.closest(".q-field, .q-note")) return;
         const rect = event.currentTarget.getBoundingClientRect();
@@ -105,6 +108,19 @@ export function FillLayer({
         const fontSize = Math.min(widget.height * 0.72, NOTE_SIZE * scale);
         if (widget.kind === "checkbox") {
           const on = Boolean(value) && value !== "Off";
+          if (!editing) {
+            return (
+              <div
+                key={widget.id}
+                className="q-field q-check"
+                data-on={on || undefined}
+                style={{ left: widget.left, top: widget.top, width: widget.width, height: widget.height }}
+                aria-hidden="true"
+              >
+                {on ? "✓" : ""}
+              </div>
+            );
+          }
           return (
             <button
               key={widget.id}
@@ -126,6 +142,8 @@ export function FillLayer({
             className="q-field"
             style={{ left: widget.left, top: widget.top, width: widget.width, height: widget.height, fontSize }}
             value={value}
+            readOnly={!editing}
+            tabIndex={editing ? 0 : -1}
             aria-label="Form field"
             onChange={(event) => onValue(widget.id, event.target.value)}
           />
@@ -147,6 +165,7 @@ export function FillLayer({
                 type="button"
                 className="q-note-move"
                 aria-label="Move text box"
+                hidden={!editing}
                 onPointerDown={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
@@ -166,20 +185,22 @@ export function FillLayer({
               />
               <textarea
                 id={`q-note-${note.id}`}
-                autoFocus={focusId === note.id}
+                autoFocus={editing && focusId === note.id}
                 style={{ fontSize: NOTE_SIZE * scale }}
                 value={note.text}
+                readOnly={!editing}
                 aria-label="Text box"
                 rows={1}
                 onChange={(event) => onNoteText(note.id, event.target.value)}
               />
-              <button type="button" className="q-note-x" aria-label="Remove text box" onClick={() => onNoteRemove(note.id)}>
+              <button type="button" className="q-note-x" aria-label="Remove text box" hidden={!editing} onClick={() => onNoteRemove(note.id)}>
                 ×
               </button>
               <button
                 type="button"
                 className="q-note-resize"
                 aria-label="Stretch text box"
+                hidden={!editing}
                 onPointerDown={(event) => {
                   event.preventDefault();
                   event.stopPropagation();

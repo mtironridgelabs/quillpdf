@@ -322,10 +322,55 @@ export function Reader() {
     }
   }, [show]);
 
-  const printCurrent = useCallback(() => {
+  const printCurrent = useCallback(async () => {
     const bytes = bytesRef.current;
+    const pdf = pdfRef.current;
     if (!bytes) return;
-    printPdf(bytes);
+    const warn = () => {
+      printPdf(bytes);
+      toast("Printed the original file. The answers are only on screen until you save a copy.");
+    };
+    if (!pdf || busyRef.current) {
+      printPdf(bytes);
+      return;
+    }
+    let answers: Awaited<ReturnType<typeof fieldsFromValues>> = [];
+    const written = notesRef.current.filter((note) => note.text);
+    try {
+      answers = await fieldsFromValues(pdf, fieldValuesRef.current);
+    } catch {
+      if (written.length > 0 || Object.keys(fieldValuesRef.current).length > 0) warn();
+      else printPdf(bytes);
+      return;
+    }
+    if (answers.length === 0 && written.length === 0) {
+      printPdf(bytes);
+      return;
+    }
+    busyRef.current = true;
+    setBusy(true);
+    try {
+      const saved = await buildSavedCopy({
+        bytes,
+        pdf,
+        answers,
+        notes: written,
+        locked: lockedRef.current,
+        canPdfium: desktopShell,
+        ask: async () => "picture",
+        fillLocked: desktopShell ? fillLockedForm : undefined,
+      });
+      if (!saved) {
+        warn();
+        return;
+      }
+      printPdf(saved.bytes);
+    } catch {
+      warn();
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
   }, []);
 
   const extract = useCallback(async () => {
@@ -1032,8 +1077,9 @@ export function Reader() {
                 : null
             }
             fill={
-              filling
+              doc
                 ? {
+                    editing: filling,
                     placing,
                     focusId: focusNote,
                     values: fieldValues,
