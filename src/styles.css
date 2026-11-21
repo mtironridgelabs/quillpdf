@@ -350,6 +350,7 @@
 .q-overlay {
   position: fixed;
   inset: 0;
+  z-index: 40;
   background: color-mix(in srgb, var(--color-ink) 42%, transparent);
 }
 
@@ -357,6 +358,7 @@
   position: fixed;
   top: 50%;
   left: 50%;
+  z-index: 41;
   width: min(40rem, calc(100vw - 32px));
   max-height: min(40rem, calc(100dvh - 32px));
   overflow: auto;
@@ -607,6 +609,10 @@
   inset: 0;
   z-index: 3;
   pointer-events: none;
+}
+
+body:has(.q-overlay) .q-fill {
+  visibility: hidden;
 }
 
 .q-fill[data-place="true"] {
