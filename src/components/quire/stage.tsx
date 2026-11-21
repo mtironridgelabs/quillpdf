@@ -20,6 +20,7 @@ type Ink = {
 };
 
 type Fill = {
+  editing: boolean;
   placing: boolean;
   focusId: string;
   values: Record<string, string>;
@@ -163,6 +164,7 @@ export function Stage({
                     scale={scale}
                     values={fill.values}
                     notes={fill.notes}
+                    editing={fill.editing}
                     placing={fill.placing}
                     focusId={fill.focusId}
                     onValue={fill.onValue}

@@ -3,6 +3,9 @@ import { appUrl } from "@/lib/app-url";
 
 let loading: Promise<typeof import("pdfjs-dist")> | null = null;
 
+/** pdf.js AnnotationMode.ENABLE_FORMS. The page is painted without field appearances. Quill draws those. */
+export const FORM_APPEARANCE_OFF = 2;
+
 export function loadPdfjs() {
   if (!loading) {
     loading = import("pdfjs-dist").then((mod) => {

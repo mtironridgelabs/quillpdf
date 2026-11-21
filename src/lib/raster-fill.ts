@@ -55,6 +55,9 @@ export async function rasterStamp(pdf: PDFDocumentProxy, fields: StampField[], n
       context.beginPath();
       context.rect(left, top, width, height);
       context.clip();
+      context.fillStyle = "#ffffff";
+      context.fillRect(left, top, width, height);
+      context.fillStyle = ink;
       if (field.kind === "checkbox") {
         context.font = `${Math.max(8, height * 0.9)}px Helvetica, Arial, sans-serif`;
         context.textAlign = "center";

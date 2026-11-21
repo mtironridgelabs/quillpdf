@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
-import { loadPdfjs } from "@/lib/pdfjs-client";
+import { FORM_APPEARANCE_OFF, loadPdfjs } from "@/lib/pdfjs-client";
 
 export function PagePaint({
   pdf,
@@ -37,6 +37,7 @@ export function PagePaint({
       const renderTask = page.render({
         canvasContext: context,
         viewport,
+        annotationMode: FORM_APPEARANCE_OFF,
         transform: dpr === 1 ? undefined : [dpr, 0, 0, dpr, 0, 0],
       });
       task = renderTask;
